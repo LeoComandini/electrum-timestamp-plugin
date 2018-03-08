@@ -7,8 +7,16 @@ You can timestamp for free using the public calendars,
 more details at [OpenTimestamps.org](https://opentimestamps.org)
 
 ## Getting started
-Adapted from [Electrum README](https://github.com/spesmilo/electrum#development-version)
+Adapted from [Electrum README](https://github.com/spesmilo/electrum#development-version),
+assume running on Linux. 
+(On Mac OS X use `brew install` instead of `sudo apt-get install`) 
 
+Electrum is a pure python application. 
+If you want to use the Qt interface, install the Qt dependencies:
+
+```
+$ sudo apt-get install python3-pyqt5
+```
 
 Install plugin requirements:
 ```

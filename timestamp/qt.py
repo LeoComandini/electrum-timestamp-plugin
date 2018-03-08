@@ -11,6 +11,7 @@ from functools import partial
 import json
 import base64
 import binascii
+import os
 
 try:
     from opentimestamps.core.timestamp import Timestamp, DetachedTimestampFile, make_merkle_tree, cat_sha256d
@@ -36,7 +37,7 @@ except ImportError:
 
 json_path_file = "db_file.json"
 default_blocks_until_confirmed = 6
-default_folder = ""
+default_folder = os.path.expanduser("~user")
 
 
 # util
