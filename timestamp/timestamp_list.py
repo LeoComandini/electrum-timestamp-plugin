@@ -54,7 +54,7 @@ class TimestampList(MyTreeWidget):
             elif status == "aggregated":
                 pic = "status_lagging.png"  # brown circle
             elif status == "pending":
-                pic = "clock1.png"
+                pic = "unconfirmed.png"
             else:  # confirmed
                 pic = "confirmed.png"
             icon = QIcon(":icons/" + pic)

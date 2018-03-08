@@ -42,23 +42,26 @@ $ ./electrum --testnet
 
 ## Create timestamps with your transactions
 1) Enable the plugin:
-    - `Tools -> Plugins -> Timestamp`, tick the checkbox.
+    - `Tools -> Plugins -> Timestamp`, tick the checkbox
+    - close and restart Electrum to abilitate the plugin
 2) Visualize your timestamp history list:
     - `Tools -> Timestamps` 
 3) Start tracking the file(s) to timestamp:
-    - click on `Add new file` select the file(s).
+    - click on `Add New File` and select the file
 4) Create and broadcast a bitcoin transaction including the timestamp:
-    - on the `Send Tab` select outputs, amount, fee 
+    - on the `Send Tab` select outputs, amount, fee
+    (select a fee > 1 sat/byte) 
     - click on `Preview`  
     - click on `Timestamp`, this write a commitment to your file(s) in the transaction 
-    - confirm the changes in the transaction
+    - confirm the changes in the transaction 
+    (if fee is too low th transaction won't be relayed or mined)
     - sign and broadcast the transaction (`Sign`, `Broadcast`)
 5) Check the timestamp history:
     - `Tools -> Timestamps`, the file now is an pending state.
 6) Wait until the transaction is confirmed (6 blocks), you can now create the timestamp proof (`file_name.ots`):
     - `Tools -> Timestamps`, 
 click on `Upgrade`,
-the timestamp now is complete.
+the timestamp now is complete
 
 You can find the timestamp proof next to the file(s):
 ```
