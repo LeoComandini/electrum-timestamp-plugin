@@ -37,7 +37,7 @@ except ImportError:
 
 json_path_file = "db_file.json"
 default_blocks_until_confirmed = 6
-default_folder = os.path.expanduser("~user")
+default_folder = os.path.expanduser("~")
 
 
 # util
