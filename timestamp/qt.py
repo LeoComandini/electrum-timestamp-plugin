@@ -307,7 +307,7 @@ class Plugin(BasePlugin):
                         tf.merge(t)
                         f.status = "complete"
                         f.block = tx_height
-                        f.date = str(timestamp_to_datetime(timestamp))
+                        f.date = timestamp_to_datetime(timestamp).strftime("%-d %B %Y")
                         f.write_ots()
                         # f.detached_timestamp = None
         self.update_storage()
