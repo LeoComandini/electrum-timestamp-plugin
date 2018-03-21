@@ -12,22 +12,28 @@
 
 from electrum.i18n import _
 from electrum.plugins import BasePlugin, hook
-from electrum_gui.qt import EnterButton
+from electrum_gui.qt import EnterButton, QRadioButton, HelpButton, Buttons, OkButton, CancelButton
 from electrum_gui.qt.util import WindowModalDialog
 from electrum_gui.qt.transaction_dialog import show_transaction
-from electrum.util import timestamp_to_datetime
+from electrum.util import timestamp_to_datetime, bh2u, InvalidPassword
+from electrum.bitcoin import public_key_from_private_key, regenerate_key, MySigningKey, Hash
 from .timestamp_list import TimestampList
 
-from PyQt5.QtWidgets import QVBoxLayout, QGridLayout, QPushButton, QFileDialog, QMessageBox
+from ecdsa.curves import SECP256k1
+from ecdsa.rfc6979 import generate_k
+from ecdsa.util import sigencode_der, sigdecode_der
+
+from PyQt5.QtWidgets import QVBoxLayout, QGridLayout, QPushButton, QFileDialog, QMessageBox, QInputDialog, QLineEdit
 from functools import partial
 import json
 import base64
 import binascii
 import os
+import hashlib
 
 try:
     from opentimestamps.core.timestamp import Timestamp, DetachedTimestampFile, make_merkle_tree, cat_sha256d
-    from opentimestamps.core.op import Op, OpAppend, OpPrepend, OpSHA256
+    from opentimestamps.core.op import Op, OpAppend, OpPrepend, OpSHA256, OpSecp256k1Commitment
     from opentimestamps.core.serialize import BytesSerializationContext, BytesDeserializationContext
     from opentimestamps.core.notary import UnknownAttestation, BitcoinBlockHeaderAttestation
     from opentimestamps.timestamp import nonce_timestamp
@@ -50,7 +56,7 @@ except ImportError:
 json_path_file = "db_file.json"
 default_blocks_until_confirmed = 6
 default_folder = os.path.expanduser("~")
-
+default_commitment_method = "s2c"  # alternative "op_return"
 
 # util
 
@@ -115,6 +121,9 @@ class FileData:
         self.path = None
         self.status = None  # tracked, aggregated, pending, completed
         self.agt = None  # aggregation tip
+        self.r_s2c = None
+        self.padding = None
+        self.pivot_pt = None
         self.txid = None
         self.block = None
         self.date = None
@@ -124,6 +133,9 @@ class FileData:
         self.path = path
         self.status = "tracked"
         self.agt = None
+        self.r_s2c = None
+        self.padding = None
+        self.pivot_pt = None
         self.txid = None
         self.block = None
         self.date = None
@@ -134,6 +146,9 @@ class FileData:
         self.path = d["path"]
         self.status = d["status"]
         self.agt = bytes.fromhex(d["agt"]) if d["agt"] else d["agt"]
+        self.r_s2c = d["r_s2c"]
+        self.padding = d["padding"]
+        self.pivot_pt = d["pivot_pt"]
         self.txid = d["txid"]
         self.block = d["block"]
         self.date = d["date"]
@@ -145,6 +160,9 @@ class FileData:
         d["path"] = self.path
         d["status"] = self.status
         d["agt"] = self.agt.hex() if self.agt else self.agt
+        d["r_s2c"] = self.r_s2c
+        d["padding"] = self.padding
+        d["pivot_pt"] = self.pivot_pt
         d["txid"] = self.txid
         d["block"] = self.block
         d["date"] = self.date
@@ -228,6 +246,7 @@ class Plugin(BasePlugin):
         BasePlugin.__init__(self, parent, config, name)
         self.proofs_storage_file = ProofsStorage(json_path_file)
         self.timestamp_list = None
+        self.commitment_method = default_commitment_method
 
     def is_available(self):
         return ots_imported
@@ -263,12 +282,77 @@ class Plugin(BasePlugin):
             script = bytes.fromhex("6a") + len(commit).to_bytes(1, "big") + commit
             tx.add_outputs([(2, script.hex(), 0)])
 
+    def sign_to_contract(self, pwd, tx, wallet, contract):
+        """Sign with sign-to-contract
+
+        we mimic the standard signing procedure trying to stick to electrum steps"""
+
+        # FIXME: password and private keys should be managed in a separate thread
+
+        i, j = 0, 0  # first input, first signature (is an arbitrary choice)
+        txin = tx.inputs()[i]
+        keystore = wallet.keystore
+        keystore.check_password(pwd)  # decode the xprv
+        keypairs = keystore.get_tx_derivations(tx)  # keypairs are the keys corresponding to the inputs of the txl
+        for k, v in keypairs.items():
+            keypairs[k] = keystore.get_private_key(v, pwd)  # picking all the private keys
+        pubkeys, x_pubkeys = tx.get_sorted_pubkeys(txin)
+        x_pubkey = x_pubkeys[j]
+        sec, compressed = keypairs.get(x_pubkey)
+        pubkey = public_key_from_private_key(sec, compressed)
+        pkey = regenerate_key(sec)
+        secexp = pkey.secret
+        private_key = MySigningKey.from_secret_exponent(secexp, curve=SECP256k1)
+        public_key = private_key.get_verifying_key()
+        pre_hash = Hash(bytes.fromhex(tx.serialize_preimage(i)))  # what this "i" means?
+        k = generate_k(order=private_key.curve.generator.order(), secexp=secexp, hash_func=hashlib.sha256,
+                       data=pre_hash)
+        pivot_pt = k * SECP256k1.generator
+        pivot_pt_encoded = bytearray(pivot_pt.x().to_bytes(33, "big"))
+        pivot_pt_encoded[0] = 2 if pivot_pt.y() % 2 == 0 else 3
+
+        while True:
+            # the r part of the signature must be 32 bytes to have the output of secp256k1commitment explicitly in the
+            # transaction, if the r is smaller than 32 bytes (1 time out of 512) we repeat the signature prepending
+            # b'\x00' to the contract
+            padding = b''
+            hasher = hashlib.sha256()
+            hasher.update(pivot_pt_encoded)
+            hasher.update(padding + contract)
+            tweak = int.from_bytes(hasher.digest(), "big")
+            k_tweaked = (k + tweak) % SECP256k1.order
+            sig = private_key.sign_digest(pre_hash, sigencode=sigencode_der, k=k_tweaked)
+            if sig[3] >= 32:
+                break
+            padding += b'\x00'
+
+        ephemeral_pubkey_x = sig[4:(4 + 32)] if sig[3] == 32 else sig[5:(5 + 32)]  # manage DER encoding
+        assert ephemeral_pubkey_x == (k_tweaked * SECP256k1.generator).x().to_bytes(32, "big")
+
+        # conclude the signature in the standard way
+        assert public_key.verify_digest(sig, pre_hash, sigdecode=sigdecode_der)
+        txin['signatures'][j] = bh2u(sig) + '01'
+        txin['pubkeys'][j] = pubkey  # needed for fd keys # ?
+        tx._inputs[i] = txin
+        tx.raw = tx.serialize()
+        # sign normally the other inputs
+        wallet.sign_transaction(tx, pwd)  # this should not overwrite the signature just made
+        # write on db the info to upgrade timestamps, upgrade is done later, when tx is broadcasted
+        for f in self.proofs_storage_file.incomplete_proofs:
+            tf = roll_timestamp(f.detached_timestamp.timestamp)
+            if tf.msg == contract:
+                f.padding = padding.hex()
+                f.pivot_pt = pivot_pt_encoded.hex()
+                f.r_s2c = ephemeral_pubkey_x.hex()
+        self.update_storage()
+
     def upgrade_timestamps_txs(self, wallet):
         for txid, tx in wallet.transactions.items():
             if txid in wallet.verified_tx.keys():
                 self.upgrade_timestamps_tx(tx)
 
     def upgrade_timestamps_tx(self, tx):
+        # op_return
         for category, script, amount in tx.outputs():
             if category == 2:  # agt -> txid
                 agt = script[4:]  # drop "6a20" op_return and op_pushdata(32)
@@ -288,6 +372,30 @@ class Plugin(BasePlugin):
                             tf.merge(t_agt)
                             f.status = "pending"
                             f.txid = t.msg[::-1].hex()
+        # s2c
+        for f in self.proofs_storage_file.incomplete_proofs:  # not efficient
+            if f.r_s2c is not None:
+                r, padding, contract, pivot_pt = (f.r_s2c, x(f.padding), f.agt, x(f.pivot_pt))
+                tx_raw = tx.serialize()
+                if r in tx_raw:
+                    i = tx_raw.find(r)
+                    tx_p = x(tx_raw[:i])
+                    tx_a = x(tx_raw[i + len(r):])
+                    # contract -> txid
+                    t_c = Timestamp(contract)
+                    t = t_c.ops.add(OpPrepend(padding)) if len(padding) > 0 else t_c
+                    t = t.ops.add(OpPrepend(pivot_pt))
+                    t = t.ops.add(OpSecp256k1Commitment())
+                    t = t.ops.add(OpPrepend(tx_p))
+                    t = t.ops.add(OpAppend(tx_a))
+                    t = t.ops.add(OpSHA256())
+                    t = t.ops.add(OpSHA256())  # txid in little endian
+                    tf = roll_timestamp(f.detached_timestamp.timestamp)
+                    if tf.msg == contract:
+                        tf.merge(t_c)
+                        f.status = "pending"
+                        f.txid = t.msg[::-1].hex()
+
         self.update_storage()
 
     def upgrade_timestamps_block(self, wallet, network):
@@ -319,9 +427,14 @@ class Plugin(BasePlugin):
 
     @hook
     def transaction_dialog(self, d):
-        d.timestamp_button = t = QPushButton(_("Timestamp"))
-        t.clicked.connect(lambda: self.add_op_return_commitment(d))
-        d.buttons.insert(0, t)
+        if self.commitment_method == "op_return":
+            d.timestamp_button = t = QPushButton(_("Timestamp"))
+            t.clicked.connect(lambda: self.add_op_return_commitment(d))
+            d.buttons.insert(0, t)
+        if self.commitment_method == "s2c":
+            d.s2c_button = s = QPushButton(_("S2C"))
+            s.clicked.connect(lambda: self.add_s2c_commitment(d))
+            d.buttons.insert(0, s)
         b = d.buttons[2]  # broadcast button
         b.clicked.connect(lambda: self.upgrade_timestamps_tx(d.tx))
 
@@ -342,11 +455,30 @@ class Plugin(BasePlugin):
         d.close()
         show_transaction(d.tx, d.main_window)
 
+    def add_s2c_commitment(self, d):
+        # FIXME: unsecure way of asking the password
+        password, okPressed = QInputDialog.getText(d, "Password dialog", "Your password:", QLineEdit.Password, "")
+        if okPressed and password != '':
+            try:
+                d.wallet.check_password(password)
+            except InvalidPassword:
+                return
+        else:
+            return
+        contract = self.aggregate_timestamps()
+        self.sign_to_contract(password, d.tx, d.wallet, contract)
+        d.update()
+
     @hook
     def transaction_dialog_update(self, d):
         tp = [i for i in self.proofs_storage_file.incomplete_proofs if i.status in ["tracked", "aggregated"]]
-        if len(tp) == 0 or any([o[0] == 2 for o in d.tx.outputs()]) or d.tx.is_complete():
-            d.timestamp_button.setDisabled(True)
+        if self.commitment_method == "op_return":
+            if len(tp) == 0 or any([o[0] == 2 for o in d.tx.outputs()]) or d.tx.is_complete():
+                d.timestamp_button.setDisabled(True)
+        if self.commitment_method == "s2c":
+            if len(tp) == 0 or d.tx.is_complete() or d.tx.is_segwit():
+                d.s2c_button.setDisabled(True)
+                # actually a segwit tx with a non segwit input would allow s2c in the standard way, but we skip on that
 
     @hook
     def init_menubar_tools(self, window, tools_menu):
@@ -386,3 +518,43 @@ class Plugin(BasePlugin):
         self.upgrade_timestamps_block(window.wallet, window.network)
         self.timestamp_list.db = self.proofs_storage_file.db
         self.timestamp_list.on_update()
+
+    def requires_settings(self):
+        return True
+
+    def settings_widget(self, window):
+        return EnterButton(_('Settings'), partial(self.settings_dialog, window))
+
+    def settings_dialog(self, window):
+        d = WindowModalDialog(window, _("Timestamp settings"))
+        vbox = QVBoxLayout(d)
+        grid = QGridLayout()
+
+        def check_state_opr():
+            if c_opr.isChecked():
+                self.commitment_method = "op_return"
+
+        def check_state_s2c():
+            if not c_opr.isChecked():
+                self.commitment_method = "s2c"
+
+        c_opr = QRadioButton(_('Use OP_RETURN'))
+        c_opr.setChecked(self.commitment_method == "op_return")
+        c_opr.toggled.connect(check_state_opr)
+        c_s2c = QRadioButton(_('Use sign-to-contract'))
+        c_s2c.setChecked(self.commitment_method == "s2c")
+        c_s2c.toggled.connect(check_state_s2c)
+        h_opr = HelpButton("Include commitment inside a OP_RETURN. "
+                           "\nThis will make your transaction 43 bytes longer, nevertheless the amounts (and hence the "
+                           "fees) won't be modified, as result you will obtain a transaction with lower sat/vbytes "
+                           "which may slow down its confirmation time.")
+        h_s2c = HelpButton("Include commitment inside the signature using sign-to-contract, with zero marginal cost"
+                           "\nFor now, it does not work with segwit transactions")
+        grid.addWidget(c_opr, 1, 1)
+        grid.addWidget(h_opr, 1, 2)
+        grid.addWidget(c_s2c, 2, 1)
+        grid.addWidget(h_s2c, 2, 2)
+        vbox.addLayout(grid)
+        vbox.addSpacing(20)
+        vbox.addLayout(Buttons(OkButton(d), CancelButton(d)))
+        return bool(d.exec_())
