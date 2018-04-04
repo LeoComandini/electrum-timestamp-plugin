@@ -456,15 +456,21 @@ class Plugin(BasePlugin):
         show_transaction(d.tx, d.main_window)
 
     def add_s2c_commitment(self, d):
-        # FIXME: unsecure way of asking the password
-        password, okPressed = QInputDialog.getText(d, "Password dialog", "Your password:", QLineEdit.Password, "")
-        if okPressed and password != '':
-            try:
-                d.wallet.check_password(password)
-            except InvalidPassword:
+        # FIXME: use a better way of asking the password
+        if d.wallet.has_password():
+            password, okPressed = QInputDialog.getText(d, "Password dialog", "Your password:", QLineEdit.Password, "")
+            if okPressed and password != '':
+                try:
+                    d.wallet.check_password(password)
+                except InvalidPassword:
+                    question = _("Invalid password.")
+                    answer = QMessageBox.question(d, _("Invalid password"), question, QMessageBox.Ok)
+                    if answer == QMessageBox.Ok:
+                        return
+            else:
                 return
         else:
-            return
+            password = None
         contract = self.aggregate_timestamps()
         self.sign_to_contract(password, d.tx, d.wallet, contract)
         d.update()
