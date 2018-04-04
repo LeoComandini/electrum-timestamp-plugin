@@ -1,4 +1,4 @@
-# Electrum timestamp plugin with sign-to-contract
+# Electrum timestamp plugin (with sign-to-contract)
 
 Instruction to run the Electrum plugin producing sign-to-contract proof with OpenTimestamps.
 
@@ -94,5 +94,5 @@ You can find the timestamp proof next to the file(s):
 ```
 
 Note that the `.ots` contains a OpSecp256k1Commitment so the standard ots library won't recognize it.
-Verify it manually using the python library just installed,
-for instance by conveniently modifying `ots-info.py`
+Verify it manually using the python library just installed, 
+for instance with `python3 ots-info.py "/path/file_name.txt.ots"`.

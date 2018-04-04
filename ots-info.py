@@ -2,8 +2,9 @@
 
 from opentimestamps.core.serialize import StreamDeserializationContext
 from opentimestamps.core.timestamp import DetachedTimestampFile
+import sys
 
-path = "/path/file_name.txt.ots"
+path = sys.argv[1]
 
 with open(path, "rb") as fo:
     serialized = fo
