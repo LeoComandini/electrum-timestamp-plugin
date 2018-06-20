@@ -15,21 +15,22 @@ Electrum is a pure python application.
 If you want to use the Qt interface, install the Qt dependencies:
 
 ```
-$ sudo apt-get install python3-pyqt5
+sudo apt-get install python3-pyqt5
 ```
 
 Install plugin requirements:
 ```
-$ pip3 install opentimestamps
+pip3 install opentimestamps
+pip3 install pyqt5
 ```
 
 Clone the Electrum source code, then include the plugin files:
 ```
-$ git clone https://github.com/spesmilo/electrum.git
-$ git clone https://github.com/LeoComandini/electrum-timestamp-plugin.git
-$ cp -r electrum-timestamp-plugin/timestamp electrum/plugins
-$ cd electrum
-$ python3 setup.py install
+git clone https://github.com/spesmilo/electrum.git
+git clone https://github.com/LeoComandini/electrum-timestamp-plugin.git
+cp -r electrum-timestamp-plugin/timestamp electrum/plugins
+cd electrum
+pip3 install .[fast]
 ```
 
 Compile the icons file for Qt:
@@ -38,14 +39,21 @@ sudo apt-get install pyqt5-dev-tools
 pyrcc5 icons.qrc -o gui/qt/icons_rc.py
 ```
 
+Compile the protobuf description file:
+
+```
+sudo apt-get install protobuf-compiler
+protoc --proto_path=lib/ --python_out=lib/ lib/paymentrequest.proto
+```
+
 To run on `mainnet`
 ```
-$ ./electrum
+./electrum
 ```
 
 To run on `testnet` 
 ```
-$ ./electrum --testnet
+./electrum --testnet
 ```
 
 ## Create timestamps with your transactions
