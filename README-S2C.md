@@ -40,8 +40,9 @@ If you want to use the Qt interface, install the Qt dependencies:
 ```
 sudo apt-get install python3-pyqt5
 sudo apt-get install python3-setuptools
+pip3 install pyqt5
 cd electrum
-python3 setup.py install
+pip3 install .[fast]
 ```
 
 Compile the icons file for Qt:
