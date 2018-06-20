@@ -16,7 +16,8 @@ from electrum_gui.qt import EnterButton, QRadioButton, HelpButton, Buttons, OkBu
 from electrum_gui.qt.util import WindowModalDialog
 from electrum_gui.qt.transaction_dialog import show_transaction
 from electrum.util import timestamp_to_datetime, bh2u, InvalidPassword
-from electrum.bitcoin import public_key_from_private_key, regenerate_key, MySigningKey, Hash
+from electrum import ecc
+from electrum.bitcoin import Hash
 from .timestamp_list import TimestampList
 
 from ecdsa.curves import SECP256k1
@@ -299,10 +300,11 @@ class Plugin(BasePlugin):
         pubkeys, x_pubkeys = tx.get_sorted_pubkeys(txin)
         x_pubkey = x_pubkeys[j]
         sec, compressed = keypairs.get(x_pubkey)
-        pubkey = public_key_from_private_key(sec, compressed)
-        pkey = regenerate_key(sec)
-        secexp = pkey.secret
-        private_key = MySigningKey.from_secret_exponent(secexp, curve=SECP256k1)
+        # pubkey might not actually be a 02-04 pubkey for fd keys; so:
+        pubkey = ecc.ECPrivkey(sec).get_public_key_hex(compressed=compressed)
+        privkey = ecc.ECPrivkey(sec)
+        secexp = privkey.secret_scalar
+        private_key = ecc._MySigningKey.from_secret_exponent(secexp, curve=SECP256k1)
         public_key = private_key.get_verifying_key()
         pre_hash = Hash(bytes.fromhex(tx.serialize_preimage(i)))  # what this "i" means?
         k = generate_k(order=private_key.curve.generator.order(), secexp=secexp, hash_func=hashlib.sha256,
