@@ -72,7 +72,7 @@ def b64string_to_bytes(s):
 
 
 def proof_from_txid_to_block(txid, height, network):
-    merkle_path = network.synchronous_get(('blockchain.transaction.get_merkle', [txid, height]))
+    merkle_path = network.get_merkle_for_transaction(txid, height)
     timestamp = Timestamp(lx(txid))
     pos = merkle_path["pos"]
     t_old = t_new = timestamp
